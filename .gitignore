@@ -1,4 +1,14 @@
-.pdf
+# ── Project: provided attachments & generated artifacts (never commit) ──
+# Subject PDFs
+*.pdf
+# vLLM repository (attachment, provided by evaluator)
+/vllm-0.10.1/
+# Moulinette binaries (attachment)
+moulinette_pkg/
+# Provided datasets (attachment)
+datasets_public/
+# Generated data: raw symlink, built indexes, outputs
+data/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
