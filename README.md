@@ -139,15 +139,47 @@ uv run python src/main.py evaluate \
 
 ## 📊 Performance analysis
 
-> _Numbers to be filled once measured on the reference machine._
+> _Numbers to be filled once measured — see the test conditions below._
 
-| Metric | Target | bm25 | embedding | hybrid |
-|---|---|---|---|---|
-| Recall@5 (docs) | ≥ 80% | _TBD_ | _TBD_ | _TBD_ |
-| Recall@5 (code) | ≥ 50% | _TBD_ | _TBD_ | _TBD_ |
-| Indexing time | ≤ 5 min | _TBD_ | _TBD_ | _TBD_ |
-| Cold start | ≤ 60 s | _TBD_ | _TBD_ | _TBD_ |
-| 1000 questions | ≤ 90 s | _TBD_ | _TBD_ | _TBD_ |
+### 🧪 Test conditions
+
+| | |
+|---|---|
+| **Machine** | _CPU model / RAM / GPU (none or model)_ |
+| **OS / Python** | _Linux_ / 3.10 |
+| **Corpus** | vLLM 0.10.1 — ~14.6k chunks (13.7k `.py`, 0.9k `.md`/`.txt`) |
+| **Datasets** | 100 docs + 100 code questions (public) |
+| **Defaults** | `k=5`, `chunk_size=2000`, embedding `bge-small-en-v1.5`, LLM `Qwen3-0.6B` |
+| **Cold start** | first query *including* model load · **Warm** = index + model already loaded |
+| **Retriever measured** | _hybrid_ (the submitted default) |
+
+### ✅ Mandatory thresholds (subject)
+
+Measured with the default configuration above.
+
+| Metric | Target | Result | Status |
+|---|---|---|---|
+| Recall@5 — docs | ≥ 80 % | _TBD_ | ⬜ |
+| Recall@5 — code | ≥ 50 % | _TBD_ | ⬜ |
+| Indexing time | ≤ 5 min | _TBD_ | ⬜ |
+| Cold-start latency | ≤ 60 s | _TBD_ | ⬜ |
+| Throughput — 1000 questions (warm) | ≤ 90 s | _TBD_ | ⬜ |
+
+### 🧭 Retriever comparison (exploratory, not mandatory)
+
+Same conditions, varying only `--retriever` (and query expansion for BM25).
+Highlights the lexical / semantic / fused trade-off.
+
+| Retriever | R@1 docs | R@5 docs | R@5 code | Index time | 1000 q (warm) |
+|---|---|---|---|---|---|
+| `bm25` | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+| `bm25` + expansion | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+| `embedding` | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+| `hybrid` | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+
+> Caching note: the figures above are **cold** (first run). A fully cached
+> `make run` re-uses the stamped `index_id` and skips index/search/answer
+> entirely — _TBD_ s end to end.
 
 ---
 
