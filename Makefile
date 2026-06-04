@@ -26,7 +26,7 @@ MODEL       ?= Qwen/Qwen3-0.6B
 # Embedding model for semantic search
 EMBED_MODEL ?= BAAI/bge-small-en-v1.5
 # Retrieval method: bm25 | embedding | hybrid
-RETRIEVER   ?= bm25
+RETRIEVER   ?= hybrid
 # Repository to index
 REPO        ?= data/raw/vllm-0.10.1
 # Top-k results per query
@@ -34,7 +34,7 @@ K           ?= 5
 # Max characters per chunk / context window
 CHUNK_SIZE  ?= 2000
 # Max questions to process (0 = all)
-LIMIT       ?= 2
+LIMIT       ?= 0
 # Query expansion: empty = auto, True = force on, False = force off
 EXPAND      ?=
 
