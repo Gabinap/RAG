@@ -15,7 +15,8 @@ install:
 	$(UV) python install $(PYTHON_VERSION)
 	$(UV) sync --frozen
 
-DATASETS_DIR      := datasets_public/public
+OPENING 		  := public
+DATASETS_DIR      := datasets_$(OPENING)/$(OPENING)
 UNANSW_DIR        := $(DATASETS_DIR)/UnansweredQuestions
 ANSW_DIR          := $(DATASETS_DIR)/AnsweredQuestions
 OUT_SEARCH        := data/output/search_results
@@ -78,7 +79,7 @@ index_docs:
 
 search_docs:
 	@$(RUN) search_dataset \
-		--dataset_path $(UNANSW_DIR)/dataset_docs_public.json \
+		--dataset_path $(UNANSW_DIR)/dataset_docs_$(OPENING).json \
 		--save_directory $(OUT_SEARCH) \
 		--retriever $(RETRIEVER) \
 		--embedding_model $(EMBED_MODEL) \
@@ -88,7 +89,7 @@ search_docs:
 
 search_code:
 	@$(RUN) search_dataset \
-		--dataset_path $(UNANSW_DIR)/dataset_code_public.json \
+		--dataset_path $(UNANSW_DIR)/dataset_code_$(OPENING).json \
 		--save_directory $(OUT_SEARCH) \
 		--retriever $(RETRIEVER) \
 		--embedding_model $(EMBED_MODEL) \
@@ -98,14 +99,14 @@ search_code:
 
 answer_docs:
 	@$(RUN) answer_dataset \
-		--student_search_results_path $(OUT_SEARCH)/dataset_docs_public.json \
+		--student_search_results_path $(OUT_SEARCH)/dataset_docs_$(OPENING).json \
 		--save_directory $(OUT_ANSWER) \
 		--model_name $(MODEL) \
 		--max_chunk_size $(CHUNK_SIZE)
 
 answer_code:
 	@$(RUN) answer_dataset \
-		--student_search_results_path $(OUT_SEARCH)/dataset_code_public.json \
+		--student_search_results_path $(OUT_SEARCH)/dataset_code_$(OPENING).json \
 		--save_directory $(OUT_ANSWER) \
 		--model_name $(MODEL) \
 		--max_chunk_size $(CHUNK_SIZE)
@@ -119,13 +120,13 @@ answer_all:
 
 evaluate_docs:
 	@$(RUN) evaluate \
-		--student_answer_path $(OUT_SEARCH)/dataset_docs_public.json \
-		--dataset_path $(ANSW_DIR)/dataset_docs_public.json
+		--student_answer_path $(OUT_SEARCH)/dataset_docs_$(OPENING).json \
+		--dataset_path $(ANSW_DIR)/dataset_docs_$(OPENING).json
 
 evaluate_code:
 	@$(RUN) evaluate \
-		--student_answer_path $(OUT_SEARCH)/dataset_code_public.json \
-		--dataset_path $(ANSW_DIR)/dataset_code_public.json
+		--student_answer_path $(OUT_SEARCH)/dataset_code_$(OPENING).json \
+		--dataset_path $(ANSW_DIR)/dataset_code_$(OPENING).json
 
 _EXCLUDE := .venv,__pycache__,moulinette_pkg,vllm-0.10.1,data
 

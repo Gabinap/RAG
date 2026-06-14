@@ -30,11 +30,22 @@ from models import (
     SearchConfig,
 )
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(levelname)s: %(message)s",
-    stream=sys.stderr,
+# Logs go to both the terminal (concise) and a persisted file (timestamped),
+# so a failed run can be diagnosed after the fact even if stderr was not
+# captured. The terminal keeps the short "LEVEL: message" form; the file adds
+# a timestamp and logger name for post-mortem context.
+_LOG_DIR = Path("logs")
+_LOG_DIR.mkdir(exist_ok=True)
+
+_console_handler = logging.StreamHandler(sys.stderr)
+_console_handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
+
+_file_handler = logging.FileHandler(_LOG_DIR / "rag.log")
+_file_handler.setFormatter(
+    logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
 )
+
+logging.basicConfig(level=logging.INFO, handlers=[_console_handler, _file_handler])
 logger = logging.getLogger(__name__)
 
 # Suppress noisy third-party loggers
