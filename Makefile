@@ -35,14 +35,14 @@ K           ?= 5
 # Max characters per chunk / context window
 CHUNK_SIZE  ?= 2000
 # Max questions to process (0 = all)
-LIMIT       ?= 1
+LIMIT       ?= 100
 # Query expansion: False (default) | True — WordNet expansion measured to
 # hurt recall on this corpus, so it stays off.
 EXPAND      ?= False
 
 RUN   := $(UV) run python src/main.py
 
-run: index search_docs search_code answer_all evaluate_docs evaluate_code
+run: index search_docs search_code  answer_all evaluate_docs evaluate_code
 
 run-docs: index_docs search_docs evaluate_docs
 
