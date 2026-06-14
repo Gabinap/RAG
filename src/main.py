@@ -45,7 +45,9 @@ _file_handler.setFormatter(
     logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
 )
 
-logging.basicConfig(level=logging.INFO, handlers=[_console_handler, _file_handler])
+logging.basicConfig(
+    level=logging.INFO, handlers=[_console_handler, _file_handler]
+    )
 logger = logging.getLogger(__name__)
 
 # Suppress noisy third-party loggers
