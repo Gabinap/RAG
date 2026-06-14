@@ -23,10 +23,10 @@ OUT_ANSWER        := data/output/search_results_and_answer
 
 # LLM for generation (alt: HuggingFaceTB/SmolLM2-135M-Instruct)
 MODEL       ?= Qwen/Qwen3-0.6B
-# Embedding model for semantic search
-EMBED_MODEL ?= BAAI/bge-small-en-v1.5
-# Retrieval method: bm25 | embedding | hybrid
-RETRIEVER   ?= hybrid
+# Embedding model for semantic search (alt: BAAI/bge-small-en-v1.5, BAAI/bge-base-en-v1.5, )
+EMBED_MODEL ?= TaylorAI/gte-tiny
+# Retrieval method: bm25 (default, best on CPU) | embedding | hybrid
+RETRIEVER   ?= bm25
 # Repository to index
 REPO        ?= data/raw/vllm-0.10.1
 # Top-k results per query
@@ -34,19 +34,18 @@ K           ?= 5
 # Max characters per chunk / context window
 CHUNK_SIZE  ?= 2000
 # Max questions to process (0 = all)
-LIMIT       ?= 0
-# Query expansion: empty = auto, True = force on, False = force off
-EXPAND      ?=
-
-_EXPAND_FLAG := $(if $(EXPAND),--expand $(EXPAND),)
+LIMIT       ?= 1
+# Query expansion: False (default) | True — WordNet expansion measured to
+# hurt recall on this corpus, so it stays off.
+EXPAND      ?= False
 
 RUN   := $(UV) run python src/main.py
 
 run: index search_docs search_code answer_all evaluate_docs evaluate_code
 
-run-docs: index search_docs answer_docs evaluate_docs
+run-docs: index_docs search_docs evaluate_docs
 
-run-code: index search_code answer_code evaluate_code
+run-code: index_code search_code evaluate_code
 
 # Run the entry point under Python's debugger (e.g. make debug ARGS="search foo")
 ARGS ?=
@@ -58,7 +57,24 @@ index:
 		--repo_path $(REPO) \
 		--retriever $(RETRIEVER) \
 		--embedding_model $(EMBED_MODEL) \
-		--max_chunk_size $(CHUNK_SIZE)
+		--max_chunk_size $(CHUNK_SIZE) \
+		--file_type all
+
+index_code:
+	@$(RUN) index \
+		--repo_path $(REPO) \
+		--retriever $(RETRIEVER) \
+		--embedding_model $(EMBED_MODEL) \
+		--max_chunk_size $(CHUNK_SIZE) \
+		--file_type code
+
+index_docs:
+	@$(RUN) index \
+		--repo_path $(REPO) \
+		--retriever $(RETRIEVER) \
+		--embedding_model $(EMBED_MODEL) \
+		--max_chunk_size $(CHUNK_SIZE) \
+		--file_type docs
 
 search_docs:
 	@$(RUN) search_dataset \
@@ -68,7 +84,7 @@ search_docs:
 		--embedding_model $(EMBED_MODEL) \
 		--k $(K) \
 		--max_chunk_size $(CHUNK_SIZE) \
-		--limit $(LIMIT) $(_EXPAND_FLAG)
+		--limit $(LIMIT) --expand $(EXPAND)
 
 search_code:
 	@$(RUN) search_dataset \
@@ -78,7 +94,7 @@ search_code:
 		--embedding_model $(EMBED_MODEL) \
 		--k $(K) \
 		--max_chunk_size $(CHUNK_SIZE) \
-		--limit $(LIMIT) $(_EXPAND_FLAG)
+		--limit $(LIMIT) --expand $(EXPAND)
 
 answer_docs:
 	@$(RUN) answer_dataset \
@@ -136,4 +152,4 @@ clean:
 fclean: clean
 	rm -rf data/processed data/output
 
-.PHONY: install run run-docs run-code debug index search_docs search_code answer_docs answer_code answer_all evaluate_docs evaluate_code lint lint-strict clean fclean
+.PHONY: install run run-docs run-code debug index index_code index_docs search_docs search_code answer_docs answer_code answer_all evaluate_docs evaluate_code lint lint-strict clean fclean

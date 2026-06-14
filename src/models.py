@@ -4,7 +4,7 @@ import uuid
 from enum import Enum
 from typing import List, Optional, Union
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, computed_field, field_validator
 
 
 class MinimalSource(BaseModel):
@@ -39,11 +39,23 @@ class RagDataset(BaseModel):
 
 
 class MinimalSearchResults(BaseModel):
-    """Search results for a single question."""
+    """Search results for a single question.
+
+    The subject's model names the field ``question``; the moulinette validator
+    requires ``question_str``. We emit both: ``question`` is the real field,
+    ``question_str`` is a computed mirror so the output validates against the
+    moulinette without changing internal code.
+    """
 
     question_id: str
     question: str
     retrieved_sources: List[MinimalSource]
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def question_str(self) -> str:
+        """Alias of ``question`` required by the moulinette validator."""
+        return self.question
 
 
 class MinimalAnswer(MinimalSearchResults):
@@ -61,7 +73,7 @@ class SearchMeta(BaseModel):
 
     retriever: str
     k: int
-    expand: Optional[bool] = None
+    expand: bool = False
     embedding_model: str
     max_chunk_size: int
     index_id: Optional[str] = None
@@ -97,13 +109,20 @@ class StudentSearchResultsAndAnswer(BaseModel):
 
 
 class Chunk(BaseModel):
-    """A chunk of text extracted from a source file."""
+    """A chunk of text extracted from a source file.
+
+    ``context`` holds retrieval-only metadata (e.g. the markdown header
+    breadcrumb above the chunk). It is prepended to the text *only* when
+    tokenizing for BM25 — it never alters ``text`` or the character indices,
+    so evaluation positions and answer context stay exact.
+    """
 
     id: str
     file_path: str
     first_character_index: int
     last_character_index: int
     text: str
+    context: str = ""
 
 
 class RetrieverMethod(str, Enum):
@@ -112,6 +131,15 @@ class RetrieverMethod(str, Enum):
     BM25 = "bm25"
     EMBEDDING = "embedding"
     HYBRID = "hybrid"
+    AUTO = "auto"
+
+
+class IndexSubset(str, Enum):
+    """Which file types to index."""
+
+    ALL = "all"
+    CODE = "code"
+    DOCS = "docs"
 
 
 class IndexConfig(BaseModel):
@@ -139,6 +167,10 @@ class IndexConfig(BaseModel):
         default="BAAI/bge-small-en-v1.5",
         description="SentenceTransformer model used for embeddings.",
     )
+    index_subset: IndexSubset = Field(
+        default=IndexSubset.ALL,
+        description="File types to index: all, code (.py), or docs (.md).",
+    )
 
 
 class SearchConfig(BaseModel):
@@ -164,12 +196,9 @@ class SearchConfig(BaseModel):
         le=10000,
         description="Maximum context length in characters passed to the LLM.",
     )
-    expand: Optional[bool] = Field(
-        default=None,
-        description=(
-            "Query expansion (synonyms). None = auto (on for bm25 only), "
-            "True = force on, False = force off."
-        ),
+    expand: bool = Field(
+        default=False,
+        description="Query expansion via WordNet synonyms (default off).",
     )
     embedding_model: str = Field(
         default="BAAI/bge-small-en-v1.5",

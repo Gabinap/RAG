@@ -46,8 +46,8 @@ make run
 Useful knobs (override any Make variable on the fly):
 
 ```bash
-make run RETRIEVER=bm25          # lexical only (fast on CPU)
-make run RETRIEVER=hybrid        # BM25 + embeddings (best, needs a GPU to be quick)
+make run                         # bm25, the default — best recall, ~4 s index
+make run RETRIEVER=hybrid        # BM25 + embeddings (slower on CPU, lower recall)
 make search_docs K=10 EXPAND=True
 make index CHUNK_SIZE=1500
 make debug ARGS="search 'how to load a LoRA adapter?'"
@@ -98,22 +98,47 @@ exact `first/last_character_index` in the original file for evaluation.
 `.py` and `.md`+`.txt` are indexed **separately** (different stopword / IDF
 profiles, and questions route to the matching index).
 
+**Header breadcrumb** 🧭 — each markdown chunk carries the trail of the last
+three headers above it (e.g. *Quantization › FP8 › Accuracy*) in a separate
+`context` field. This breadcrumb is prepended to the text **only when tokenizing
+for BM25** — it never touches the stored text or character indices — so
+topic-level questions match the right section. It lifts docs recall@5 from
+93 % to 94 %.
+
 ---
 
 ## 🧭 Retrieval method
 
-Three routes, chosen with `--retriever`:
+Four routes, chosen with `--retriever`:
 
 | Method | How it climbs |
 |---|---|
-| `bm25` | Lexical scoring (`bm25s`) — exact token matching |
-| `embedding` | Semantic cosine search (`BAAI/bge-small-en-v1.5`, normalised) |
-| `hybrid` | Both branches fused with **Reciprocal Rank Fusion** |
+| `bm25` *(default)* | Lexical scoring (`bm25s`) with identifier-aware tokenization |
+| `embedding` | Semantic cosine search (`TaylorAI/gte-tiny`, normalised) |
+| `hybrid` | BM25 + embedding fused with **Reciprocal Rank Fusion** |
+| `auto` | Resolves to `bm25` for both docs and code |
 
-**Query expansion** 🪢 (WordNet synonyms) is layered onto the BM25 branch to
-catch paraphrases. It's auto-enabled for `bm25` only — embeddings already handle
-meaning, so it would be redundant for `embedding`/`hybrid`. The original query is
-always kept as the anchor, so exact matches are never lost.
+**Identifier-aware tokenization** 🔑 is the key recall lever. Questions
+paraphrase code symbols in plain English (`trust_remote_code`,
+`tie_word_embeddings`, `BaseProcessingInfo`), but a default tokenizer keeps each
+identifier as one opaque token, so the lexical match is lost. We split compound
+identifiers into their component words — on both the corpus and the query,
+keeping the originals — with four rules, each kept only after it was measured to
+help on a held-out set:
+
+| Rule | Example |
+|---|---|
+| `snake_case` / `UPPER_CASE` | `trust_remote_code` → `trust remote code` |
+| `camelCase` / `PascalCase` | `BaseModelLoader` → `Base Model Loader` |
+| acronym boundary | `HTTPServer` → `HTTP Server` |
+| `kebab-case` | `multi-step` → `multi step` |
+
+This lifts code recall@5 from 50 % to 70 % and docs from 89 % to 93 % (a
+digit/letter split, `FP8` → `FP 8`, was tried and dropped — it only helped the
+public code set). See `_augment` in [`src/indexing/bm25.py`](src/indexing/bm25.py).
+
+**Query expansion** 🪢 (WordNet synonyms) is available via `--expand True` but
+**off by default**: it was measured to *reduce* recall on this corpus.
 
 ---
 
@@ -139,47 +164,66 @@ uv run python src/main.py evaluate \
 
 ## 📊 Performance analysis
 
-> _Numbers to be filled once measured — see the test conditions below._
+All figures below are **measured** with the default configuration
+(`make run`): BM25 with identifier-aware tokenization, `k=5`,
+`chunk_size=2000`, on CPU.
 
 ### 🧪 Test conditions
 
 | | |
 |---|---|
-| **Machine** | _CPU model / RAM / GPU (none or model)_ |
-| **OS / Python** | _Linux_ / 3.10 |
+| **Machine** | Intel Core Ultra 7 265 (20 threads) · 16 GB RAM · CPU-only inference (no CUDA; the discrete GPU is unused) |
+| **OS / Python** | Ubuntu 22.04.5 LTS · kernel 6.8 / Python 3.10.20 |
 | **Corpus** | vLLM 0.10.1 — ~14.6k chunks (13.7k `.py`, 0.9k `.md`/`.txt`) |
 | **Datasets** | 100 docs + 100 code questions (public) |
-| **Defaults** | `k=5`, `chunk_size=2000`, embedding `bge-small-en-v1.5`, LLM `Qwen3-0.6B` |
-| **Cold start** | first query *including* model load · **Warm** = index + model already loaded |
-| **Retriever measured** | _hybrid_ (the submitted default) |
+| **Defaults** | `k=5`, `chunk_size=2000`, retriever `bm25`, LLM `Qwen3-0.6B` |
+| **Cold start** | a fresh process answering a single query, index load included |
+| **Warm throughput** | index loaded once, then 1000 queries searched in-process |
+| **Retriever measured** | `bm25` with identifier-aware tokenization (both indexes) |
 
 ### ✅ Mandatory thresholds (subject)
 
-Measured with the default configuration above.
+Measured with the default configuration above. Recall@k uses the same metric
+as the official moulinette: a source counts as found at **IoU ≥ 5 %** (character
+ranges) — `make evaluate` reproduces the grader's numbers exactly.
 
 | Metric | Target | Result | Status |
 |---|---|---|---|
-| Recall@5 — docs | ≥ 80 % | _TBD_ | ⬜ |
-| Recall@5 — code | ≥ 50 % | _TBD_ | ⬜ |
-| Indexing time | ≤ 5 min | _TBD_ | ⬜ |
-| Cold-start latency | ≤ 60 s | _TBD_ | ⬜ |
-| Throughput — 1000 questions (warm) | ≤ 90 s | _TBD_ | ⬜ |
+| Recall@5 — docs | ≥ 80 % | **94 %** | ✅ |
+| Recall@5 — code | ≥ 50 % | **70 %** | ✅ |
+| Indexing time | ≤ 5 min | **4.3 s** | ✅ |
+| Cold-start latency | ≤ 60 s | **0.4 s** | ✅ |
+| Throughput — 1000 questions (warm) | ≤ 90 s | **74.6 s** | ✅ |
 
-### 🧭 Retriever comparison (exploratory, not mandatory)
+Full recall breakdown for the default `bm25` retriever (100 questions each):
 
-Same conditions, varying only `--retriever` (and query expansion for BM25).
-Highlights the lexical / semantic / fused trade-off.
+| | Recall@1 | Recall@3 | Recall@5 | Recall@10 |
+|---|---|---|---|---|
+| docs | 69 % | 89 % | 94 % | 96 % |
+| code | 44 % | 62 % | 70 % | 79 % |
 
-| Retriever | R@1 docs | R@5 docs | R@5 code | Index time | 1000 q (warm) |
-|---|---|---|---|---|---|
-| `bm25` | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
-| `bm25` + expansion | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
-| `embedding` | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
-| `hybrid` | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+### 🧭 How the recall was built up
 
-> Caching note: the figures above are **cold** (first run). A fully cached
-> `make run` re-uses the stamped `index_id` and skips index/search/answer
-> entirely — _TBD_ s end to end.
+The default retriever is `bm25`; each lever below was added on top and kept
+only after it was measured to help (numbers are recall@5, IoU metric, public
+set).
+
+| Step | R@5 docs | R@5 code |
+|---|---|---|
+| **`bm25`** lexical (baseline) | 89 % | 50 % |
+| + identifier splitting (snake / camelCase) | 92 % | 69 % |
+| + acronym & kebab-case splitting | 93 % | 70 % |
+| + header breadcrumb on markdown chunks **(default)** | **94 %** | **70 %** |
+
+Identifier splitting is the big lever for **code** (+19), the extra splitting
+rules and the header breadcrumb close the gap on **docs** (+5 over plain BM25).
+`embedding` (gte-tiny) and `hybrid` were tried as bonus alternatives and both
+**underperform** lexical retrieval here (docs ~73 / ~86, code ~47 / ~58).
+
+> Why no embeddings by default: encoding the 13.7k code chunks with a stronger
+> model (e.g. `bge-small`) takes ~15 min on CPU — over the 5-min indexing cap —
+> and still does not beat BM25 here. On this corpus, lexical retrieval with
+> identifier splitting wins outright while keeping indexing near-instant.
 
 ---
 
@@ -189,6 +233,15 @@ Highlights the lexical / semantic / fused trade-off.
   content-fingerprint `index_id` is stamped at build time. Re-running with the
   same inputs skips the work entirely; changing the repo, params or model
   invalidates the right link of the chain automatically.
+
+  | When | What is cached | Where |
+  |---|---|---|
+  | `index` | chunks + BM25/embedding indexes + `index_id` fingerprint | `data/processed/{py,md}/` |
+  | `search_dataset` | search results (`meta` + sources) | `data/output/search_results/` |
+  | `answer_dataset` | results + generated answers (`meta`) | `data/output/search_results_and_answer/` |
+
+  Each step skips itself on the next run if its `meta` and question ids still
+  match; nothing is written outside `data/` (it is git-ignored).
 - **`text` stored in each source** — avoids re-reading files at answer time.
 - **Lazy heavy imports** — `torch`/`transformers`/`langchain` load only when
   actually needed, keeping cached runs near-instant.
@@ -205,21 +258,39 @@ Highlights the lexical / semantic / fused trade-off.
   fixed by deferring it to the chunking step (the crux of the perf work).
 - **Left padding for batched generation** — decoder models generate from the
   last token, so the batch must be left-padded.
-- **Embedding indexing on CPU** — encoding ~15k chunks is slow without a GPU;
-  use `RETRIEVER=bm25` for a quick send on a laptop.
+- **Embedding indexing on CPU** — encoding ~15k chunks is slow without a GPU
+  (a stronger model like `bge-small` needs ~15 min, over the 5-min cap). This,
+  plus the recall results, is why `bm25` is the default and embeddings are an
+  optional bonus.
+- **Lexical match on code symbols** — the decisive insight: natural-language
+  questions rarely contain a code identifier verbatim, so splitting
+  `snake_case`/`camelCase` on both sides was worth far more than any semantic
+  model on this corpus (+19 pts code recall@5).
 
 ---
 
 ## 📚 Resources & AI usage
 
+### Papers & articles
+
+- **RAG** — Lewis et al., 2020. [Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks](https://arxiv.org/abs/2005.11401) — the foundational paper introducing RAG.
+- **BM25** — Robertson & Zaragoza, 2009. [The Probabilistic Relevance Framework: BM25 and Beyond](https://www.nowpublishers.com/article/Details/INR-019) — the ranking function behind the lexical retrieval branch.
+- **RRF** — Cormack et al., 2009. [Reciprocal Rank Fusion outperforms Condorcet and individual Rank Learning Methods](https://plg.uwaterloo.ca/~gvcormac/cormacksigir09-rrf.pdf) — the fusion strategy used for hybrid retrieval.
+- **Dense retrieval** — Karpukhin et al., 2020. [Dense Passage Retrieval for Open-Domain Question Answering](https://arxiv.org/abs/2004.04906) — motivation for embedding-based retrieval alongside BM25.
+- **RAG survey** — Gao et al., 2023. [Retrieval-Augmented Generation for Large Language Models: A Survey](https://arxiv.org/abs/2312.10997) — comprehensive overview of RAG techniques and architectures.
+
+### Libraries & tools
+
 - BM25 — [`bm25s`](https://github.com/xhluca/bm25s)
-- Embeddings — [BGE](https://huggingface.co/BAAI/bge-small-en-v1.5),
+- Embeddings — [GTE-tiny](https://huggingface.co/TaylorAI/gte-tiny),
   [sentence-transformers](https://www.sbert.net/)
-- Fusion — [Reciprocal Rank Fusion](https://plg.uwaterloo.ca/~gvcormac/cormacksigir09-rrf.pdf)
+- Chunking — [langchain-text-splitters](https://python.langchain.com/docs/concepts/text_splitters/)
 - LLM — [`Qwen/Qwen3-0.6B`](https://huggingface.co/Qwen/Qwen3-0.6B),
   [vLLM](https://docs.vllm.ai/)
 
-**AI usage:** an AI assistant was used as a belay partner 🧗 — to explore
-library trade-offs (BM25 vs embeddings, chunking, fusion), draft boilerplate,
-and review design decisions. Every choice was understood, tested and validated
-before being committed.
+### AI usage
+
+An AI assistant was used as a belay partner 🧗 — to explore library trade-offs
+(BM25 vs embeddings, chunking strategies, RRF fusion), draft boilerplate, and
+review design decisions. Every choice was understood, tested and validated before
+being committed.

@@ -1,6 +1,7 @@
 """File collection and chunking for .py and .md files."""
 
 import hashlib
+import re
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -9,6 +10,9 @@ from tqdm import tqdm
 from models import Chunk
 
 _CHUNK_OVERLAP = 200
+# Markdown ATX headers, used to build a per-chunk section breadcrumb.
+_HEADER = re.compile(r"^#{1,6}\s+(.*)$", re.MULTILINE)
+_BREADCRUMB_DEPTH = 3
 # Suffix -> langchain Language enum NAME. The enum (and langchain, which
 # transitively pulls torch) is imported lazily in chunk_file so that search,
 # answer and evaluate — which never chunk — start fast.
@@ -45,6 +49,24 @@ def collect_files(repo_path: str) -> List[Path]:
 
 def _chunk_id(file_path: str, start: int) -> str:
     return hashlib.md5(f"{file_path}:{start}".encode()).hexdigest()
+
+
+def _breadcrumb(content: str, start: int) -> str:
+    """Return the last few markdown headers above position ``start``.
+
+    Gives BM25 the section context a chunk sits under, so topic-level
+    questions match the right passage. Retrieval-only: never stored in the
+    chunk text. Returns an empty string when there are no headers above.
+
+    Args:
+        content: Full file content.
+        start: Character offset of the chunk inside content.
+
+    Returns:
+        Up to the last ``_BREADCRUMB_DEPTH`` header titles, space-joined.
+    """
+    heads = _HEADER.findall(content[:start])
+    return " ".join(heads[-_BREADCRUMB_DEPTH:])
 
 
 def _find_positions(
@@ -108,6 +130,7 @@ def chunk_file(
 
     file_path_str = str(path)
     positions = _find_positions(content, raw_chunks)
+    is_markdown = language_name == "MARKDOWN"
 
     return [
         Chunk(
@@ -116,6 +139,7 @@ def chunk_file(
             first_character_index=start,
             last_character_index=end,
             text=text,
+            context=_breadcrumb(content, start) if is_markdown else "",
         )
         for text, (start, end) in zip(raw_chunks, positions)
         if text.strip()

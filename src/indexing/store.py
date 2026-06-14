@@ -9,6 +9,7 @@ from models import Chunk
 CHUNKS_FILE = "chunks.json"
 BM25_SUBDIR = "bm25_index"
 EMBEDDINGS_FILE = "embeddings.npy"
+EMBEDDING_CHUNKS_FILE = "embedding_chunks.json"
 INDEX_ID_FILE = "index_id.txt"
 
 
@@ -89,5 +90,9 @@ def has_bm25(index_dir: str) -> bool:
 
 
 def has_embeddings(index_dir: str) -> bool:
-    """Return True if an embedding index exists in index_dir."""
-    return (Path(index_dir) / EMBEDDINGS_FILE).exists()
+    """Return True if a complete embedding index exists in index_dir."""
+    d = Path(index_dir)
+    return (
+        (d / EMBEDDINGS_FILE).exists()
+        and (d / EMBEDDING_CHUNKS_FILE).exists()
+    )

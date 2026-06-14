@@ -36,18 +36,17 @@ def get_model_and_tokenizer(model_name: str) -> Tuple[Any, Any]:
     print(colorize(f"  🤖  Loading model: {model_name}", BLUE, BOLD))
     print(divider(thin=True))
 
-    dtype = torch.float16 if torch.cuda.is_available() else torch.float32
-    device_info = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"  {'Device':<20}" + colorize(device_info, BOLD))
-    print(f"  {'Dtype':<20}" + colorize(str(dtype), BOLD))
+    print(f"  {'Device':<20}" + colorize("cpu", BOLD))
+    print(f"  {'Dtype':<20}" + colorize(str(torch.float32), BOLD))
 
     _tokenizer = AutoTokenizer.from_pretrained(model_name)
     _model = AutoModelForCausalLM.from_pretrained(
         model_name,
-        dtype=dtype,
-        device_map="auto",
+        dtype=torch.float32,
+        device_map="cpu",
     )
     _model.eval()
+    _model = torch.compile(_model)
     _loaded_model_name = model_name
 
     print(colorize("  ✓  Model ready", COLOR_SUCCESS, BOLD))

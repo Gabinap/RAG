@@ -14,6 +14,7 @@ from constants import (
 from models import (
     Chunk,
     IndexConfig,
+    IndexSubset,
     MinimalSearchResults,
     MinimalSource,
     RetrieverMethod,
@@ -47,6 +48,21 @@ _CODE_STOPWORDS = None
 _DOCS_STOPWORDS = "english"
 _FUSION_POOL = 20
 
+_ALL_SUBDIRS = [
+    (_PY_SUBDIR, _CODE_STOPWORDS),
+    (_MD_SUBDIR, _DOCS_STOPWORDS),
+]
+
+
+def _active_subdirs(subset: IndexSubset) -> List[str]:
+    """Return the list of subdirectory names to process for a given subset."""
+    if subset == IndexSubset.CODE:
+        return [_PY_SUBDIR]
+    if subset == IndexSubset.DOCS:
+        return [_MD_SUBDIR]
+    return [_PY_SUBDIR, _MD_SUBDIR]
+
+
 # A loaded index: (method, chunks, bm25_retriever_or_none, embeddings_or_none).
 LoadedIndex = Tuple[RetrieverMethod, List[Chunk], Any, Any]
 
@@ -76,15 +92,27 @@ def _chunks_to_sources(chunks: List[Chunk]) -> List[MinimalSource]:
     ]
 
 
-def _should_expand(cfg: SearchConfig) -> bool:
-    """Decide whether to apply query expansion for this search.
+def _auto_retriever(subdir: str) -> RetrieverMethod:
+    """Resolve AUTO to the best retriever for each index type.
 
-    Rule: explicit cfg.expand wins; otherwise auto — on for BM25 only,
-    off for embedding and hybrid (the embedding handles semantics natively).
+    With identifier-aware tokenization (see indexing.bm25._augment), BM25
+    is the strongest method measured on this corpus for *both* docs and
+    code (docs 92 %, code 69 % recall@5) and needs no embeddings, so AUTO
+    maps to BM25 in both cases.
     """
-    if cfg.expand is not None:
-        return cfg.expand
-    return cfg.retriever == RetrieverMethod.BM25
+    return RetrieverMethod.BM25
+
+
+def _resolve_cfg(cfg: SearchConfig, subdir: str) -> SearchConfig:
+    """Return a cfg with AUTO retriever resolved for the given subdir."""
+    if cfg.retriever != RetrieverMethod.AUTO:
+        return cfg
+    return cfg.model_copy(update={"retriever": _auto_retriever(subdir)})
+
+
+def _should_expand(cfg: SearchConfig) -> bool:
+    """Return whether query expansion is enabled for this search."""
+    return cfg.expand
 
 
 def _resolve_method(
@@ -201,12 +229,18 @@ def _embedding_search(
     query: str,
     cfg: SearchConfig,
     matrix: Any,
-    chunks: List[Chunk],
     top_n: Optional[int] = None,
 ) -> List[Chunk]:
-    """Run embedding similarity search on one index."""
+    """Run embedding similarity search on one index.
+
+    matrix is a (np.ndarray, List[Chunk]) tuple produced by load_embeddings,
+    where the list contains only the chunks that were actually embedded.
+    """
     n = top_n if top_n is not None else cfg.k
-    return search_embeddings(query, matrix, chunks, n, cfg.embedding_model)
+    mat_arr, emb_chunks = matrix
+    return search_embeddings(
+        query, mat_arr, emb_chunks, n, cfg.embedding_model
+    )
 
 
 def _search_loaded(
@@ -221,13 +255,13 @@ def _search_loaded(
     if method == RetrieverMethod.BM25:
         return _bm25_search(query, cfg, retriever, chunks, stopwords)
     if method == RetrieverMethod.EMBEDDING:
-        return _embedding_search(query, cfg, matrix, chunks)
+        return _embedding_search(query, cfg, matrix)
 
     # Hybrid: pull a deeper pool per branch so RRF can surface mid-rank
     # consensus, then cut the fused list to k.
     pool = max(cfg.k, _FUSION_POOL)
     bm = _bm25_search(query, cfg, retriever, chunks, stopwords, top_n=pool)
-    em = _embedding_search(query, cfg, matrix, chunks, top_n=pool)
+    em = _embedding_search(query, cfg, matrix, top_n=pool)
     id_to_chunk = {c.id: c for c in chunks}
     return [id_to_chunk[cid] for cid in rrf(bm, em)[: cfg.k]]
 
@@ -248,7 +282,7 @@ def _compute_index_id(cfg: IndexConfig) -> str:
     h = hashlib.sha256()
     h.update(
         f"{cfg.max_chunk_size}|{cfg.retriever.value}|"
-        f"{cfg.embedding_model}".encode()
+        f"{cfg.embedding_model}|{cfg.index_subset.value}".encode()
     )
     for path in collect_files(cfg.repo_path):
         st = path.stat()
@@ -259,12 +293,13 @@ def _compute_index_id(cfg: IndexConfig) -> str:
 def _index_artifacts_present(cfg: IndexConfig) -> bool:
     """Return True if every artifact required by cfg.retriever exists."""
     need_bm25 = cfg.retriever in (
-        RetrieverMethod.BM25, RetrieverMethod.HYBRID
+        RetrieverMethod.BM25, RetrieverMethod.HYBRID, RetrieverMethod.AUTO
     )
     need_emb = cfg.retriever in (
-        RetrieverMethod.EMBEDDING, RetrieverMethod.HYBRID
+        RetrieverMethod.EMBEDDING, RetrieverMethod.HYBRID, RetrieverMethod.AUTO
     )
-    for subdir in (_PY_SUBDIR, _MD_SUBDIR):
+    subdirs = _active_subdirs(cfg.index_subset)
+    for subdir in subdirs:
         target = str(Path(cfg.output_path) / subdir)
         if need_bm25 and not has_bm25(target):
             return False
@@ -299,11 +334,12 @@ def build_index(cfg: IndexConfig) -> None:
     chunks = chunk_repository(cfg.repo_path, cfg.max_chunk_size)
     py_chunks, md_chunks = _split_chunks(chunks)
 
+    _auto = (RetrieverMethod.AUTO, RetrieverMethod.HYBRID)
     need_bm25 = cfg.retriever in (
-        RetrieverMethod.BM25, RetrieverMethod.HYBRID
+        RetrieverMethod.BM25, RetrieverMethod.HYBRID, RetrieverMethod.AUTO
     )
     need_emb = cfg.retriever in (
-        RetrieverMethod.EMBEDDING, RetrieverMethod.HYBRID
+        RetrieverMethod.EMBEDDING, *_auto
     )
 
     print()
@@ -334,16 +370,20 @@ def build_index(cfg: IndexConfig) -> None:
     print(colorize("  Building indexes…", BLUE, BOLD))
     print()
 
-    for subdir, sub_chunks, stopwords in [
-        (_PY_SUBDIR, py_chunks, _CODE_STOPWORDS),
-        (_MD_SUBDIR, md_chunks, _DOCS_STOPWORDS),
-    ]:
+    chunks_by_subdir = {
+        _PY_SUBDIR: (py_chunks, _CODE_STOPWORDS),
+        _MD_SUBDIR: (md_chunks, _DOCS_STOPWORDS),
+    }
+    for subdir in _active_subdirs(cfg.index_subset):
+        sub_chunks, stopwords = chunks_by_subdir[subdir]
         target = str(Path(cfg.output_path) / subdir)
         save_chunks(sub_chunks, target)
         if need_bm25:
             build_bm25(sub_chunks, target, stopwords)
         if need_emb:
-            build_embeddings(sub_chunks, target, cfg.embedding_model)
+            exts = (".py",) if subdir == _PY_SUBDIR else (".md", ".txt")
+            emb_chunks = [c for c in sub_chunks if c.file_path.endswith(exts)]
+            build_embeddings(emb_chunks, target, cfg.embedding_model)
 
     # Stamp the content fingerprint so unchanged rebuilds keep caches valid.
     save_index_id(cfg.output_path, index_id)
@@ -378,8 +418,9 @@ def retrieve(query: str, cfg: SearchConfig) -> List[MinimalSource]:
         (_PY_SUBDIR, _CODE_STOPWORDS),
         (_MD_SUBDIR, _DOCS_STOPWORDS),
     ]:
-        loaded = _load_for_search(str(base / subdir), cfg)
-        for chunk in _search_loaded(query, cfg, loaded, stopwords):
+        resolved = _resolve_cfg(cfg, subdir)
+        loaded = _load_for_search(str(base / subdir), resolved)
+        for chunk in _search_loaded(query, resolved, loaded, stopwords):
             if chunk.id not in seen:
                 seen.add(chunk.id)
                 merged.append(chunk)
@@ -479,11 +520,12 @@ def search_dataset(
 
     subdir = _infer_index_subdir(dataset_path)
     stopwords = _CODE_STOPWORDS if subdir == _PY_SUBDIR else _DOCS_STOPWORDS
-    loaded = _load_for_search(str(Path(cfg.index_path) / subdir), cfg)
+    resolved = _resolve_cfg(cfg, subdir)
+    loaded = _load_for_search(str(Path(cfg.index_path) / subdir), resolved)
 
     results: List[MinimalSearchResults] = []
     for q in tqdm(questions, desc="Searching", unit="q"):
-        top_k = _search_loaded(q["question"], cfg, loaded, stopwords)
+        top_k = _search_loaded(q["question"], resolved, loaded, stopwords)
         results.append(
             MinimalSearchResults(
                 question_id=q["question_id"],

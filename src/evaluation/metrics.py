@@ -130,6 +130,30 @@ def _overlap_chars(
     return max(0, overlap_end - overlap_start)
 
 
+def _iou(retrieved: MinimalSource, correct: MinimalSource) -> float:
+    """Return the Intersection-over-Union of two sources' character ranges.
+
+    Matches the moulinette's definition: a source counts as found when this
+    ratio meets the threshold. Returns 0 for different files or empty union.
+
+    Args:
+        retrieved: A retrieved source with file path and char range.
+        correct: A ground-truth source with file path and char range.
+
+    Returns:
+        Intersection size divided by union size, in [0, 1].
+    """
+    intersection = _overlap_chars(retrieved, correct)
+    if intersection == 0:
+        return 0.0
+    union = (
+        (retrieved.last_character_index - retrieved.first_character_index)
+        + (correct.last_character_index - correct.first_character_index)
+        - intersection
+    )
+    return intersection / union if union > 0 else 0.0
+
+
 def _is_found(
     retrieved_sources: List[MinimalSource],
     correct_source: MinimalSource,
@@ -137,24 +161,19 @@ def _is_found(
 ) -> bool:
     """Return True if any retrieved source covers enough of correct_source.
 
+    Uses Intersection-over-Union (IoU), matching the moulinette grader.
+
     Args:
         retrieved_sources: Top-k retrieved sources for the question.
         correct_source: One ground-truth source to check against.
-        min_overlap: Minimum ratio of correct source length that must
-            be covered by a retrieved source to count as found.
+        min_overlap: Minimum IoU between a retrieved source and the correct
+            source to count it as found.
 
     Returns:
-        True if at least one retrieved source meets the overlap threshold.
+        True if at least one retrieved source meets the IoU threshold.
     """
-    correct_source_length = (
-        correct_source.last_character_index
-        - correct_source.first_character_index
-    )
-    if correct_source_length <= 0:
-        return False
     return any(
-        _overlap_chars(candidate, correct_source) / correct_source_length
-        >= min_overlap
+        _iou(candidate, correct_source) >= min_overlap
         for candidate in retrieved_sources
     )
 

@@ -1,16 +1,32 @@
 """Embedding retrieval: model singleton, build, load, search, fusion."""
 
+import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
 from constants import BLUE, BOLD, COLOR_SUCCESS, colorize
-from indexing.store import EMBEDDINGS_FILE
+from indexing.store import EMBEDDING_CHUNKS_FILE, EMBEDDINGS_FILE
 from models import Chunk
 
 # BGE models expect an instruction on the query side only (not on passages).
 _BGE_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
+
+# Batch sizes tuned for CPU to avoid L3-cache thrashing with long chunks.
+_BATCH_SIZE_CPU = {
+    "tiny":  32, "micro":  32, "small":  32, "base": 16, "large":  8,
+}
+
+
+def _batch_size_for(model_name: str) -> int:
+    """Return a sensible encode batch size for the model."""
+    lower = model_name.lower()
+    for key, size in _BATCH_SIZE_CPU.items():
+        if key in lower:
+            return size
+    return 32
+
 
 _model: Optional[Any] = None
 _loaded_model_name: Optional[str] = None
@@ -29,12 +45,23 @@ def get_embedding_model(model_name: str) -> Any:
     if _model is not None and _loaded_model_name == model_name:
         return _model
 
-    from sentence_transformers import SentenceTransformer
     import torch
+    from sentence_transformers import SentenceTransformer
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
     print(colorize(f"  🧠  Loading embedding model: {model_name}", BLUE, BOLD))
-    _model = SentenceTransformer(model_name, device=device)
+
+    _model = SentenceTransformer(model_name, device="cpu")
+    _model.float()
+    torch.quantization.quantize_dynamic(
+        _model,
+        {torch.nn.Linear},
+        dtype=torch.qint8,
+        inplace=True,
+    )
+    print(colorize(
+        "  ⚡  INT8 dynamic quantisation applied", COLOR_SUCCESS, BOLD
+    ))
+
     _loaded_model_name = model_name
     print(colorize("  ✓  Embedding model ready", COLOR_SUCCESS, BOLD))
     return _model
@@ -64,39 +91,55 @@ def build_embeddings(
     """
     model = get_embedding_model(model_name)
     texts = [chunk.text for chunk in chunks]
+    bs = _batch_size_for(model_name)
+    print(colorize(f"  ⚡  Encoding batch_size={bs}", BLUE, BOLD))
     embeddings = model.encode(
         texts,
+        batch_size=bs,
         normalize_embeddings=True,
         show_progress_bar=True,
         convert_to_numpy=True,
     )
+    out = Path(output_dir)
     try:
-        np.save(str(Path(output_dir) / EMBEDDINGS_FILE), embeddings)
+        np.save(str(out / EMBEDDINGS_FILE), embeddings)
+        with (out / EMBEDDING_CHUNKS_FILE).open("w", encoding="utf-8") as f:
+            json.dump([c.model_dump() for c in chunks], f)
     except OSError as e:
         raise RuntimeError(
             f"Cannot save embeddings in '{output_dir}': {e}"
         ) from e
 
 
-def load_embeddings(index_dir: str) -> np.ndarray:
-    """Load the embedding matrix from disk.
+def load_embeddings(index_dir: str) -> Tuple[np.ndarray, List[Chunk]]:
+    """Load the embedding matrix and its aligned chunk list from disk.
 
     Args:
-        index_dir: Directory containing embeddings.npy.
+        index_dir: Directory containing embeddings.npy and
+            embedding_chunks.json.
 
     Returns:
-        A (n_chunks, dim) float array of normalised embeddings.
+        Tuple of (matrix, chunks) where matrix row i corresponds to chunks[i].
 
     Raises:
-        FileNotFoundError: If embeddings.npy is absent.
+        FileNotFoundError: If either file is absent.
     """
-    path = Path(index_dir) / EMBEDDINGS_FILE
-    if not path.exists():
+    d = Path(index_dir)
+    mat_path = d / EMBEDDINGS_FILE
+    chunks_path = d / EMBEDDING_CHUNKS_FILE
+    if not mat_path.exists():
         raise FileNotFoundError(
-            f"Embeddings missing at '{path}'. Re-run 'make index'."
+            f"Embeddings missing at '{mat_path}'. Re-run 'make index'."
         )
-    matrix: np.ndarray = np.load(str(path))
-    return matrix
+    if not chunks_path.exists():
+        raise FileNotFoundError(
+            f"Embedding chunks missing at '{chunks_path}'."
+            " Re-run 'make index'."
+        )
+    matrix: np.ndarray = np.load(str(mat_path))
+    with chunks_path.open(encoding="utf-8") as f:
+        emb_chunks = [Chunk(**c) for c in json.load(f)]
+    return matrix, emb_chunks
 
 
 def search_embeddings(

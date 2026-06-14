@@ -25,6 +25,7 @@ from models import (
     EvaluateConfig,
     GenerationConfig,
     IndexConfig,
+    IndexSubset,
     RetrieverMethod,
     SearchConfig,
 )
@@ -49,8 +50,9 @@ class RAG:
         repo_path: str = "data/raw/vllm-0.10.1",
         output_path: str = "data/processed",
         max_chunk_size: int = 2000,
-        retriever: str = "hybrid",
-        embedding_model: str = "BAAI/bge-small-en-v1.5",
+        retriever: str = "auto",
+        embedding_model: str = "TaylorAI/gte-tiny",
+        file_type: str = "all",
     ) -> None:
         """Index the vLLM repository and persist the search index.
 
@@ -60,6 +62,7 @@ class RAG:
             max_chunk_size: Maximum number of characters per chunk (<=10000).
             retriever: Retrieval method — bm25, embedding, or hybrid.
             embedding_model: SentenceTransformer model for embeddings.
+            file_type: Which files to index — all, code (.py), or docs (.md).
         """
         try:
             cfg = IndexConfig(
@@ -68,6 +71,7 @@ class RAG:
                 max_chunk_size=max_chunk_size,
                 retriever=RetrieverMethod(retriever),
                 embedding_model=embedding_model,
+                index_subset=IndexSubset(file_type),
             )
             build_index(cfg)
         except Exception as e:
@@ -79,10 +83,10 @@ class RAG:
         query: str,
         k: int = 5,
         index_path: str = "data/processed",
-        retriever: str = "hybrid",
+        retriever: str = "auto",
         max_chunk_size: int = 2000,
-        expand: Optional[bool] = None,
-        embedding_model: str = "BAAI/bge-small-en-v1.5",
+        expand: bool = False,
+        embedding_model: str = "TaylorAI/gte-tiny",
     ) -> None:
         """Search the index for a single query and print results as JSON.
 
@@ -92,7 +96,7 @@ class RAG:
             index_path: Path to the saved index directory.
             retriever: Retrieval method — bm25, embedding, or hybrid.
             max_chunk_size: Maximum context length in characters.
-            expand: Query expansion — None=auto (bm25 only), True/False=force.
+            expand: Enable WordNet synonym expansion on the query.
             embedding_model: SentenceTransformer model for embeddings.
         """
         try:
@@ -115,11 +119,11 @@ class RAG:
         save_directory: str = "data/output/search_results",
         k: int = 5,
         index_path: str = "data/processed",
-        retriever: str = "hybrid",
+        retriever: str = "auto",
         max_chunk_size: int = 2000,
         limit: int = 0,
-        expand: Optional[bool] = None,
-        embedding_model: str = "BAAI/bge-small-en-v1.5",
+        expand: bool = False,
+        embedding_model: str = "TaylorAI/gte-tiny",
     ) -> None:
         """Process all questions in a dataset and save search results.
 
@@ -131,7 +135,7 @@ class RAG:
             retriever: Retrieval method — bm25, embedding, or hybrid.
             max_chunk_size: Maximum context length in characters.
             limit: Max questions to process (0 = all).
-            expand: Query expansion — None=auto (bm25 only), True/False=force.
+            expand: Enable WordNet synonym expansion on the query.
             embedding_model: SentenceTransformer model for embeddings.
         """
         try:
@@ -158,12 +162,12 @@ class RAG:
         query: str,
         k: int = 5,
         index_path: str = "data/processed",
-        retriever: str = "hybrid",
+        retriever: str = "auto",
         max_chunk_size: int = 2000,
         model_name: str = "Qwen/Qwen3-0.6B",
         max_new_tokens: int = 512,
-        expand: Optional[bool] = None,
-        embedding_model: str = "BAAI/bge-small-en-v1.5",
+        expand: bool = False,
+        embedding_model: str = "TaylorAI/gte-tiny",
     ) -> None:
         """Answer a single question using retrieved context and the LLM.
 
@@ -175,7 +179,7 @@ class RAG:
             max_chunk_size: Maximum context length in characters.
             model_name: HuggingFace model identifier for generation.
             max_new_tokens: Maximum tokens to generate.
-            expand: Query expansion — None=auto (bm25 only), True/False=force.
+            expand: Enable WordNet synonym expansion on the query.
             embedding_model: SentenceTransformer model for embeddings.
         """
         try:
