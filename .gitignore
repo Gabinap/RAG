@@ -7,6 +7,9 @@
 moulinette_pkg/
 # Provided datasets (attachment)
 datasets_public/
+datasets_private/
+datasets_private.zip
+*.zip
 # Generated data: raw symlink, built indexes, outputs
 data/
 
